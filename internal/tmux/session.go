@@ -70,38 +70,7 @@ func KillSession(name string) error {
 }
 
 func ApplyLayout(sessionName, projectType string) error {
-	switch projectType {
-	case "go":
-		// Main editor window is already created. Add terminal + test runner.
-		exec.Command("tmux", "rename-window", "-t", sessionName+":0", "editor").Run()
-		exec.Command("tmux", "new-window", "-t", sessionName, "-n", "terminal").Run()
-		exec.Command("tmux", "new-window", "-t", sessionName, "-n", "test").Run()
-		exec.Command("tmux", "send-keys", "-t", sessionName+":test", "go test ./...", "").Run()
-		exec.Command("tmux", "select-window", "-t", sessionName+":editor").Run()
-
-	case "node":
-		exec.Command("tmux", "rename-window", "-t", sessionName+":0", "editor").Run()
-		exec.Command("tmux", "new-window", "-t", sessionName, "-n", "terminal").Run()
-		exec.Command("tmux", "new-window", "-t", sessionName, "-n", "dev").Run()
-		exec.Command("tmux", "select-window", "-t", sessionName+":editor").Run()
-
-	case "rust":
-		exec.Command("tmux", "rename-window", "-t", sessionName+":0", "editor").Run()
-		exec.Command("tmux", "new-window", "-t", sessionName, "-n", "terminal").Run()
-		exec.Command("tmux", "new-window", "-t", sessionName, "-n", "cargo").Run()
-		exec.Command("tmux", "select-window", "-t", sessionName+":editor").Run()
-
-	case "python":
-		exec.Command("tmux", "rename-window", "-t", sessionName+":0", "editor").Run()
-		exec.Command("tmux", "new-window", "-t", sessionName, "-n", "terminal").Run()
-		exec.Command("tmux", "select-window", "-t", sessionName+":editor").Run()
-
-	default:
-		exec.Command("tmux", "rename-window", "-t", sessionName+":0", "editor").Run()
-		exec.Command("tmux", "new-window", "-t", sessionName, "-n", "terminal").Run()
-		exec.Command("tmux", "select-window", "-t", sessionName+":editor").Run()
-	}
-
+	exec.Command("tmux", "rename-window", "-t", sessionName+":0", "editor").Run()
 	return nil
 }
 
