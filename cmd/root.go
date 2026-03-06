@@ -30,9 +30,17 @@ var listCmd = &cobra.Command{
 	RunE:  runList,
 }
 
+var switchCmd = &cobra.Command{
+	Use:   "switch [session]",
+	Short: "Switch to a tmux session (interactive picker or by name)",
+	Args:  cobra.MaximumNArgs(1),
+	RunE:  runSwitch,
+}
+
 func init() {
 	rootCmd.AddCommand(cleanupCmd)
 	rootCmd.AddCommand(listCmd)
+	rootCmd.AddCommand(switchCmd)
 }
 
 func Execute() error {
@@ -73,6 +81,37 @@ func runCleanup(cmd *cobra.Command, args []string) error {
 		fmt.Printf("Killed %d session(s): %s\n", len(killed), strings.Join(killed, ", "))
 	}
 	return nil
+}
+
+func runSwitch(cmd *cobra.Command, args []string) error {
+	// If a session name is provided, switch directly
+	if len(args) == 1 {
+		name := args[0]
+		if !tmux.SessionExists(name) {
+			if err := tmux.CreateSession(name, ""); err != nil {
+				return fmt.Errorf("failed to create session: %w", err)
+			}
+		}
+		return tmux.SwitchSession(name)
+	}
+
+	// Otherwise, show interactive picker
+	sessions, err := tmux.ListSessions()
+	if err != nil || len(sessions) == 0 {
+		fmt.Println("No active tmux sessions.")
+		return nil
+	}
+
+	selected, err := ui.RunSessionSwitcher(sessions)
+	if err != nil {
+		return err
+	}
+
+	if selected == nil {
+		return nil
+	}
+
+	return tmux.SwitchSession(selected.Name)
 }
 
 func runList(cmd *cobra.Command, args []string) error {

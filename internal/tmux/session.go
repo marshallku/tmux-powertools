@@ -46,8 +46,11 @@ func SessionExists(name string) bool {
 }
 
 func CreateSession(name, path string) error {
-	cmd := exec.Command("tmux", "new-session", "-d", "-s", name, "-c", path)
-	return cmd.Run()
+	args := []string{"new-session", "-d", "-s", name}
+	if path != "" {
+		args = append(args, "-c", path)
+	}
+	return exec.Command("tmux", args...).Run()
 }
 
 func SwitchSession(name string) error {
