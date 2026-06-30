@@ -279,6 +279,23 @@ pub fn switch_to_pane(target: &str) -> io::Result<()> {
     Ok(())
 }
 
+/// Send a literal Escape key to a pane (`session:window.pane`). Used by the
+/// agents dashboard to interrupt an agent's current turn — Claude/Codex
+/// TUIs treat Escape as "stop generating" without killing the process.
+pub fn send_escape(target: &str) -> io::Result<()> {
+    let status = Command::new("tmux")
+        .args(["send-keys", "-t", target, "Escape"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()?;
+    if !status.success() {
+        return Err(io::Error::other(format!(
+            "tmux send-keys -t {target} exited with status {status}"
+        )));
+    }
+    Ok(())
+}
+
 pub fn kill_session(name: &str) -> io::Result<()> {
     let status = Command::new("tmux")
         .args(["kill-session", "-t", name])

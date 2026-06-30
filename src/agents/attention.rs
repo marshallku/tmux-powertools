@@ -149,6 +149,20 @@ pub fn parse_recent(bytes: &[u8], cutoff: i64, limit: usize) -> Vec<AttentionEnt
     entries
 }
 
+/// Clear the attention queue (dashboard "dismiss all"). Truncates rather
+/// than deletes so the hooks' `>>` appends keep working without recreating
+/// the file. A concurrent append between read and truncate can be lost —
+/// the same small window the fzf picker's consume-rewrite already has.
+pub fn clear_queue() -> std::io::Result<()> {
+    let Some(path) = queue_path() else {
+        return Ok(());
+    };
+    if path.exists() {
+        fs::write(&path, b"")?;
+    }
+    Ok(())
+}
+
 /// Render an epoch-second timestamp as a short relative age string
 /// (`12s`, `4m`, `2h`, `3d`). Matches the `human_age` helper in
 /// `attention-picker.sh` for visual consistency.

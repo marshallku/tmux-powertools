@@ -23,6 +23,13 @@ pub enum Action {
     JumpAttention,
     /// Agents dashboard: open the fzf attention picker.
     AttentionPicker,
+    /// Agents dashboard: send Escape to the selected pane (interrupt the
+    /// agent's current turn without killing it).
+    Interrupt,
+    /// Agents dashboard: SIGTERM the selected codex background job.
+    CancelJob,
+    /// Agents dashboard: clear the attention queue.
+    DismissAttention,
 }
 
 impl Action {
@@ -34,6 +41,9 @@ impl Action {
             "down" => Some(Self::Down),
             "jump-attention" => Some(Self::JumpAttention),
             "attention-picker" => Some(Self::AttentionPicker),
+            "interrupt" => Some(Self::Interrupt),
+            "cancel-job" => Some(Self::CancelJob),
+            "dismiss-attention" => Some(Self::DismissAttention),
             _ => None,
         }
     }
@@ -113,6 +123,9 @@ const AGENTS_DEFAULTS: &[(Action, &[&str])] = &[
     (Action::Down, &["down", "j"]),
     (Action::JumpAttention, &["a"]),
     (Action::AttentionPicker, &["A"]),
+    (Action::Interrupt, &["i"]),
+    (Action::CancelJob, &["x"]),
+    (Action::DismissAttention, &["d"]),
 ];
 
 fn build_map(
@@ -140,7 +153,7 @@ fn build_map(
     for name in overrides.keys() {
         if Action::from_config_key(name).is_none() {
             eprintln!(
-                "tmx: warning: unknown action '{name}' in [keys.{surface}] (known: quit, select, up, down, jump-attention, attention-picker)"
+                "tmx: warning: unknown action '{name}' in [keys.{surface}] (known: quit, select, up, down, jump-attention, attention-picker, interrupt, cancel-job, dismiss-attention)"
             );
         }
     }
@@ -258,6 +271,29 @@ mod tests {
         // ctrl-a must NOT trigger the jump (modifier mismatch).
         assert_eq!(
             map.action(&press(KeyCode::Char('a'), KeyModifiers::CONTROL)),
+            None
+        );
+    }
+
+    #[test]
+    fn default_agents_map_binds_dashboard_actions() {
+        let map = build_map("agents", AGENTS_DEFAULTS, &HashMap::new());
+        assert_eq!(
+            map.action(&press(KeyCode::Char('i'), KeyModifiers::NONE)),
+            Some(Action::Interrupt)
+        );
+        assert_eq!(
+            map.action(&press(KeyCode::Char('x'), KeyModifiers::NONE)),
+            Some(Action::CancelJob)
+        );
+        assert_eq!(
+            map.action(&press(KeyCode::Char('d'), KeyModifiers::NONE)),
+            Some(Action::DismissAttention)
+        );
+        // The picker surface must NOT bind them (letters belong to search).
+        let picker = build_map("picker", PICKER_DEFAULTS, &HashMap::new());
+        assert_eq!(
+            picker.action(&press(KeyCode::Char('i'), KeyModifiers::NONE)),
             None
         );
     }

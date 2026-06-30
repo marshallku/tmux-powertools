@@ -117,16 +117,14 @@ impl<T: PickerItem> Model<T> {
         if let Some(action) = keys::picker_map().action(&key) {
             match action {
                 Action::Quit => self.quit = true,
-                Action::Select => {
-                    if !self.filtered_idx.is_empty() {
-                        self.selected = Some(self.filtered_idx[self.cursor]);
-                        self.quit = true;
-                    }
+                Action::Select if !self.filtered_idx.is_empty() => {
+                    self.selected = Some(self.filtered_idx[self.cursor]);
+                    self.quit = true;
                 }
                 Action::Up => self.move_up(),
                 Action::Down => self.move_down(),
-                // Attention actions are dashboard-only; ignore here.
-                Action::JumpAttention | Action::AttentionPicker => {}
+                // Remaining actions are dashboard-only; ignore here.
+                _ => {}
             }
             return;
         }

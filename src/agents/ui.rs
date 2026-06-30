@@ -172,8 +172,89 @@ impl Model {
                 self.pending_action = Some(Action::OpenAttentionPicker);
                 self.quit = true;
             }
+            // The three in-place actions below run immediately and keep the
+            // dashboard open — they are plain commands, not handoffs, so no
+            // raw-mode teardown is needed. Feedback lands in the notice line.
+            Some(KeyAction::Interrupt) => self.interrupt_selection(),
+            Some(KeyAction::CancelJob) => self.cancel_selected_job(),
+            Some(KeyAction::DismissAttention) => {
+                if self.snapshot.attention.is_empty() {
+                    self.notice = Some("attention queue already empty".to_string());
+                } else {
+                    self.notice = Some(match attention::clear_queue() {
+                        Ok(()) => {
+                            // Reflect immediately rather than waiting for the
+                            // next tick — but only when the file was actually
+                            // emptied, so the UI never claims "empty" after a
+                            // failed write.
+                            self.snapshot.attention.clear();
+                            "attention queue cleared".to_string()
+                        }
+                        Err(e) => format!("failed to clear attention queue: {e}"),
+                    });
+                }
+            }
             None => {}
         }
+    }
+
+    /// Send Escape to the selected pane — interrupts the agent's current
+    /// turn without killing the process. No-op with a notice on rows that
+    /// have no pane (codex background jobs) or that aren't agents (a plain
+    /// shell or editor row — sending Escape there is a footgun, e.g. it
+    /// would drop nvim out of insert mode).
+    fn interrupt_selection(&mut self) {
+        let Some(agent) = self.snapshot.agents.get(self.cursor) else {
+            return;
+        };
+        if !matches!(
+            agent.kind,
+            AgentKind::Claude | AgentKind::Codex | AgentKind::Custom
+        ) {
+            self.notice = Some("selected row is not an agent — nothing to interrupt".to_string());
+            return;
+        }
+        let Some(pane) = &agent.pane else {
+            self.notice = Some("selected row has no pane to interrupt".to_string());
+            return;
+        };
+        let target = pane.target();
+        self.notice = Some(match tmux::send_escape(&target) {
+            Ok(()) => format!("sent Escape to {target}"),
+            Err(e) => format!("interrupt {target} failed: {e}"),
+        });
+    }
+
+    /// SIGTERM the selected codex background job. No-op with a notice on
+    /// pane rows — those are interrupted, not cancelled.
+    fn cancel_selected_job(&mut self) {
+        let Some(agent) = self.snapshot.agents.get(self.cursor) else {
+            return;
+        };
+        let Some(job_id) = agent.id.strip_prefix("codex:") else {
+            self.notice = Some("selected row is not a codex job (use interrupt)".to_string());
+            return;
+        };
+        let pid = self
+            .snapshot
+            .codex_jobs
+            .iter()
+            .find(|j| j.id == job_id)
+            .and_then(|j| j.pid);
+        let Some(pid) = pid else {
+            self.notice = Some(format!("job {job_id} has no recorded pid"));
+            return;
+        };
+        let result = std::process::Command::new("kill")
+            .arg(pid.to_string())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        self.notice = Some(match result {
+            Ok(s) if s.success() => format!("sent SIGTERM to job {job_id} (pid {pid})"),
+            Ok(s) => format!("kill {pid} exited with status {s}"),
+            Err(e) => format!("kill {pid} failed: {e}"),
+        });
     }
 
     fn move_up(&mut self) {
@@ -422,7 +503,8 @@ fn render(frame: &mut Frame, model: &mut Model) {
                 .add_modifier(Modifier::BOLD),
         ),
         None => (
-            " j/k nav  enter switch  a jump  A picker  q quit".to_string(),
+            " j/k nav  enter switch  i interrupt  x cancel  a jump  A picker  d dismiss  q quit"
+                .to_string(),
             theme::muted_style(),
         ),
     };
@@ -689,6 +771,155 @@ mod tests {
             flags: Flags::default(),
             extra: String::new(),
         }
+    }
+
+    /// A background codex-job row (no pane) plus the matching job entry.
+    fn codex_job_agent(job_id: &str, pid: Option<u32>) -> (Agent, crate::agents::state::CodexJob) {
+        let agent = Agent {
+            id: format!("codex:{job_id}"),
+            pane: None,
+            kind: AgentKind::Codex,
+            command: "codex".into(),
+            status: Status::Background,
+            cwd: PathBuf::from("/x"),
+            repo_name: "x".into(),
+            flags: Flags::default(),
+            extra: String::new(),
+        };
+        let job = crate::agents::state::CodexJob {
+            id: job_id.into(),
+            title: String::new(),
+            kind_label: "task".into(),
+            workspace_root: PathBuf::from("/x"),
+            status: "running".into(),
+            started_at_ms: Some(0),
+            updated_at_ms: Some(0),
+            pid,
+        };
+        (agent, job)
+    }
+
+    fn snapshot_with(agents: Vec<Agent>, jobs: Vec<crate::agents::state::CodexJob>) -> Snapshot {
+        let mut snap = Snapshot::empty();
+        snap.agents = agents;
+        snap.codex_jobs = jobs;
+        snap
+    }
+
+    #[test]
+    fn cancel_selected_job_sigterms_the_codex_pid() {
+        // Spawn a real child to receive the signal. `sleep` terminates on
+        // SIGTERM, so a successful cancel makes it exit.
+        let mut child = std::process::Command::new("sleep")
+            .arg("60")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn sleep");
+        let pid = child.id();
+
+        let (agent, job) = codex_job_agent("task-x", Some(pid));
+        let mut model = Model::new(snapshot_with(vec![agent], vec![job]));
+        model.cursor = 0;
+        model.cancel_selected_job();
+
+        // Generous budget (~5s) so a loaded box doesn't flake — SIGTERM
+        // delivery is near-instant; this only bounds the failure case.
+        let mut terminated = false;
+        for _ in 0..200 {
+            if child.try_wait().expect("try_wait").is_some() {
+                terminated = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        if !terminated {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        assert!(terminated, "cancel should SIGTERM the codex pid");
+        assert!(
+            model.notice.as_deref().unwrap_or("").contains("SIGTERM"),
+            "notice was: {:?}",
+            model.notice
+        );
+    }
+
+    #[test]
+    fn cancel_selected_job_on_pane_row_is_guarded() {
+        let mut model = Model::new(snapshot_with(
+            vec![agent(AgentKind::Claude, Status::Working, "a")],
+            Vec::new(),
+        ));
+        model.cursor = 0;
+        model.cancel_selected_job();
+        assert!(
+            model
+                .notice
+                .as_deref()
+                .unwrap_or("")
+                .contains("not a codex job"),
+            "notice was: {:?}",
+            model.notice
+        );
+    }
+
+    #[test]
+    fn cancel_selected_job_without_pid_reports_missing() {
+        let (agent, job) = codex_job_agent("task-y", None);
+        let mut model = Model::new(snapshot_with(vec![agent], vec![job]));
+        model.cursor = 0;
+        model.cancel_selected_job();
+        assert!(
+            model
+                .notice
+                .as_deref()
+                .unwrap_or("")
+                .contains("no recorded pid"),
+            "notice was: {:?}",
+            model.notice
+        );
+    }
+
+    #[test]
+    fn interrupt_selection_on_codex_row_is_guarded() {
+        // Codex jobs have no pane → interrupt is a no-op with a notice,
+        // never an attempt to send keys to a nonexistent target.
+        let (agent, job) = codex_job_agent("task-z", Some(123));
+        let mut model = Model::new(snapshot_with(vec![agent], vec![job]));
+        model.cursor = 0;
+        model.interrupt_selection();
+        assert!(
+            model
+                .notice
+                .as_deref()
+                .unwrap_or("")
+                .contains("no pane to interrupt"),
+            "notice was: {:?}",
+            model.notice
+        );
+    }
+
+    #[test]
+    fn interrupt_selection_on_non_agent_pane_is_guarded() {
+        // A plain shell/editor row must NOT receive Escape — that would be a
+        // footgun (e.g. dropping nvim out of insert mode). The kind guard
+        // fires before any tmux send-keys is attempted.
+        let mut model = Model::new(snapshot_with(
+            vec![agent(AgentKind::Shell, Status::Idle, "a")],
+            Vec::new(),
+        ));
+        model.cursor = 0;
+        model.interrupt_selection();
+        assert!(
+            model
+                .notice
+                .as_deref()
+                .unwrap_or("")
+                .contains("not an agent"),
+            "notice was: {:?}",
+            model.notice
+        );
     }
 
     #[test]
